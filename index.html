@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>Lamp & Location Barcode Tracker</title>
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- HTML5 QR / Barcode Scanner Library -->
+  <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
+</head>
+<body class="bg-gray-100 text-gray-800 font-sans min-h-screen pb-12">
+
+  <!-- Header -->
+  <header class="bg-indigo-600 text-white p-4 shadow-md text-center">
+    <h1 class="text-xl font-bold">Lamp Location Tracker</h1>
+    <p class="text-xs text-indigo-200">Scan Location &rarr; Scan Lamp &rarr; Saved</p>
+  </header>
+
+  <main class="max-w-md mx-auto p-4 space-y-4">
+
+    <!-- Active Mode & Scanner Controls -->
+    <div class="bg-white p-4 rounded-lg shadow space-y-3">
+      <div class="flex justify-between items-center border-b pb-2">
+        <span class="font-semibold text-gray-700">Active Target:</span>
+        <span id="activeModeBadge" class="px-2 py-1 bg-blue-100 text-blue-800 text-xs font-bold rounded">
+          LOCATION
+        </span>
+      </div>
+
+      <!-- Live Camera Container -->
+      <div id="reader" class="w-full bg-gray-200 rounded border border-dashed border-gray-400 overflow-hidden" style="min-height: 220px;"></div>
+      
+      <div class="flex gap-2">
+        <button id="toggleScannerBtn" class="w-full py-2 bg-indigo-600 text-white rounded font-medium shadow hover:bg-indigo-700 transition">
+          Start Camera
+        </button>
+      </div>
+    </div>
+
+    <!-- Scanning & Input Form -->
+    <div class="bg-white p-4 rounded-lg shadow space-y-3">
+      <div>
+        <label class="block text-xs font-bold text-gray-600 uppercase mb-1">1. Current Location Code</label>
+        <div class="flex gap-2">
+          <input type="text" id="locInput" placeholder="Scan or type Location (e.g. SHELF-A1)" 
+            class="w-full p-2 border rounded text-sm focus:ring-2 focus:ring-indigo-500 outline-none uppercase" />
+          <button onclick="setMode('location')" class="px-3 py-1 bg-gray-200 text-xs font-semibold rounded hover:bg-gray-300">
+            Scan
+          </button>
+        </div>
+      </div>
+
+      <div>
+        <label class="block text-xs font-bold text-gray-600 uppercase mb-1">2. Lamp Barcode ID</label>
+        <div class="flex gap-2">
+          <input type="text" id="lampInput" placeholder="Scan or type Lamp ID (e.g. LAMP-012)" 
+            class="w-full p-2 border rounded text-sm focus:ring-2 focus:ring-indigo-500 outline-none uppercase" />
+          <button onclick="setMode('lamp')" class="px-3 py-1 bg-gray-200 text-xs font-semibold rounded hover:bg-gray-300">
+            Scan
+          </button>
+        </div>
+      </div>
+
+      <button id="saveBtn" class="w-full py-2.5 bg-green-600 text-white font-bold rounded shadow hover:bg-green-700 transition">
+        Assign Lamp to Location
+      </button>
+    </div>
+
+    <!-- Inventory Lookup & Search -->
+    <div class="bg-white p-4 rounded-lg shadow space-y-3">
+      <div class="flex justify-between items-center">
+        <h2 class="font-bold text-gray-700">Inventory (<span id="itemCount">0</span>)</h2>
+        <button onclick="exportCSV()" class="text-xs bg-emerald-100 text-emerald-800 font-bold px-2 py-1 rounded border border-emerald-300 hover:bg-emerald-200">
+          Export CSV
+        </button>
+      </div>
+
+      <input type="text" id="searchInput" placeholder="Search Lamp ID or Location..." 
+        class="w-full p-2 border rounded text-sm focus:ring-2 focus:ring-indigo-500 outline-none" onkeyup="renderTable()" />
+
+      <!-- Inventory Table -->
+      <div class="overflow-x-auto max-h-64 border rounded">
+        <table class="w-full text-left text-xs">
+          <thead class="bg-gray-100 border-b">
+            <tr>
+              <th class="p-2">Lamp ID</th>
+              <th class="p-2">Location</th>
+              <th class="p-2 text-right">Action</th>
+            </tr>
+          </thead>
+          <tbody id="inventoryBody" class="divide-y divide-gray-200">
+            <!-- Rows injected via JS -->
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+  </main>
+
+  <script>
+    // State Management
+    let inventory = JSON.parse(localStorage.getItem('lampInventory') || '{}');
+    let activeMode = 'location'; // 'location' or 'lamp'
+    let html5QrcodeScanner = null;
+    let isScanning = false;
+
+    // UI Updates
+    function updateModeBadge() {
+      const badge = document.getElementById('activeModeBadge');
+      if (activeMode === 'location') {
+        badge.textContent = 'SCANNING LOCATION';
+        badge.className = 'px-2 py-1 bg-blue-100 text-blue-800 text-xs font-bold rounded';
+      } else {
+        badge.textContent = 'SCANNING LAMP';
+        badge.className = 'px-2 py-1 bg-amber-100 text-amber-800 text-xs font-bold rounded';
+      }
+    }
+
+    function setMode(mode) {
+      activeMode = mode;
+      updateModeBadge();
+    }
+
+    // Camera Barcode Scanning Handler
+    function onScanSuccess(decodedText) {
+      const cleanedText = decodedText.trim().toUpperCase();
+      if (activeMode === 'location') {
+        document.getElementById('locInput').value = cleanedText;
+        // Auto-switch to Lamp Mode after Location is captured
+        setMode('lamp');
+      } else {
+        document.getElementById('lampInput').value = cleanedText;
+        // Auto-save if location is already filled
+        saveEntry();
+      }
+    }
+
+    // Toggle Camera
+    document.getElementById('toggleScannerBtn').addEventListener('click', () => {
+      if (!isScanning) {
+        html5QrcodeScanner = new Html5Qrcode("reader");
+        html5QrcodeScanner.start(
+          { facingMode: "environment" },
+          { fps: 10, qrbox: { width: 250, height: 150 } },
+          onScanSuccess
+        ).then(() => {
+          
